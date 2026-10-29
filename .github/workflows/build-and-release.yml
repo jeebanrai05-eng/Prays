@@ -42,9 +42,14 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Restore Debug Keystore
+      - name: Restore Signing Keystore
         run: |
-          if [ -f "debug.keystore.base64" ] && [ ! -f "debug.keystore" ]; then
+          if [ -n "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" ]; then
+            echo "Decoding release keystore from secrets..."
+            echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > my-upload-key.jks
+          elif [ -f "my-upload-key.jks" ]; then
+            echo "Using bundled my-upload-key.jks..."
+          elif [ -f "debug.keystore.base64" ] && [ ! -f "debug.keystore" ]; then
             echo "Decoding debug.keystore from base64..."
             base64 -d debug.keystore.base64 > debug.keystore
           fi
@@ -55,8 +60,20 @@ jobs:
       - name: Run Unit Tests
         run: ./gradlew testDebugUnitTest --no-daemon
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --no-daemon
+      - name: Build Android APK
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
+          STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD || 'TokDownloader2026SecureKey!' }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS || 'upload' }}
+          KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD || 'TokDownloader2026SecureKey!' }}
+        run: |
+          if [ -f "my-upload-key.jks" ]; then
+            echo "Building signed Release APK..."
+            ./gradlew assembleRelease --no-daemon
+          else
+            echo "Building Debug APK..."
+            ./gradlew assembleDebug --no-daemon
+          fi
 
       - name: Prepare APK Asset
         id: prepare_apk
@@ -67,7 +84,7 @@ jobs:
           fi
           
           mkdir -p release-artifacts
-          APK_SRC=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          APK_SRC=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
           
           if [ -f "$APK_SRC" ]; then
             DEST_NAME="TokDownloader-${VERSION_TAG}.apk"
@@ -77,7 +94,7 @@ jobs:
             echo "version_tag=${VERSION_TAG}" >> $GITHUB_OUTPUT
             echo "APK ready at: release-artifacts/${DEST_NAME}"
           else
-            echo "Error: APK not found in app/build/outputs/apk/debug"
+            echo "Error: No APK found in app/build/outputs/apk"
             exit 1
           fi
 
@@ -98,9 +115,9 @@ jobs:
             ### 🚀 TokDownloader ${{ steps.prepare_apk.outputs.version_tag }} Release
             
             #### Highlights & Features:
-            - **Exclusive Nepal Politics Trending Hub**: Curated video updates for Balen Shah, Harka Sampang, PM Pushpa Kamal Dahal (Prachanda), KP Sharma Oli, Parliament debates, and national political parties.
+            - **Exclusive Nepal Politics Trending Hub**: Verified political updates for Balen Shah, Harka Sampang, PM Pushpa Kamal Dahal (Prachanda), KP Sharma Oli, Parliament debates, and national parties.
             - **Facebook Post Preparation Screen**: One-tap AI-assisted authentic Nepali titles, captions, and targeted political hashtags ready to post.
-            - **High-Speed TikTok Downloader**: Multi-quality download engine (1080p HD, 720p, MP3 Audio) with speed tracking and duplicate protection.
+            - **High-Speed Video Downloader**: Multi-quality download engine (1080p HD, 720p, MP3 Audio) with speed tracking.
             - **Media Library**: Persistent organizer for downloaded videos, prepared social posts, and bookmarked political videos.
             - **In-App Self-Update**: Direct updates from GitHub Releases via built-in updater.
             - **Dark Navy Glassmorphic UI**: AMOLED-friendly futuristic design with animated glowing grid.
