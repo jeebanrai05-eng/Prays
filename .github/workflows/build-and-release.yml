@@ -1,0 +1,114 @@
+name: Build & Release Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag version (e.g. v1.0.0)'
+        required: false
+        default: 'v1.0.0'
+      create_release:
+        description: 'Publish as GitHub Release?'
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Package APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Restore Debug Keystore
+        run: |
+          if [ -f "debug.keystore.base64" ] && [ ! -f "debug.keystore" ]; then
+            echo "Decoding debug.keystore from base64..."
+            base64 -d debug.keystore.base64 > debug.keystore
+          fi
+
+      - name: Grant Execute Permission for Gradlew
+        run: chmod +x gradlew
+
+      - name: Run Unit Tests
+        run: ./gradlew testDebugUnitTest --no-daemon
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Prepare APK Asset
+        id: prepare_apk
+        run: |
+          VERSION_TAG="${{ github.ref_name }}"
+          if [ -z "$VERSION_TAG" ] || [ "$VERSION_TAG" = "main" ] || [ "$VERSION_TAG" = "master" ]; then
+            VERSION_TAG="${{ inputs.tag_name || 'v1.0.0' }}"
+          fi
+          
+          mkdir -p release-artifacts
+          APK_SRC=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          
+          if [ -f "$APK_SRC" ]; then
+            DEST_NAME="TokDownloader-${VERSION_TAG}.apk"
+            cp "$APK_SRC" "release-artifacts/${DEST_NAME}"
+            echo "apk_path=release-artifacts/${DEST_NAME}" >> $GITHUB_OUTPUT
+            echo "apk_name=${DEST_NAME}" >> $GITHUB_OUTPUT
+            echo "version_tag=${VERSION_TAG}" >> $GITHUB_OUTPUT
+            echo "APK ready at: release-artifacts/${DEST_NAME}"
+          else
+            echo "Error: APK not found in app/build/outputs/apk/debug"
+            exit 1
+          fi
+
+      - name: Upload APK to Actions Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.prepare_apk.outputs.apk_name }}
+          path: ${{ steps.prepare_apk.outputs.apk_path }}
+          retention-days: 30
+
+      - name: Publish to GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release == true)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.prepare_apk.outputs.version_tag }}
+          name: "TokDownloader ${{ steps.prepare_apk.outputs.version_tag }}"
+          body: |
+            ### 🚀 TokDownloader ${{ steps.prepare_apk.outputs.version_tag }} Release
+            
+            #### Highlights & Features:
+            - **Exclusive Nepal Politics Trending Hub**: Curated video updates for Balen Shah, Harka Sampang, PM Pushpa Kamal Dahal (Prachanda), KP Sharma Oli, Parliament debates, and national political parties.
+            - **Facebook Post Preparation Screen**: One-tap AI-assisted authentic Nepali titles, captions, and targeted political hashtags ready to post.
+            - **High-Speed TikTok Downloader**: Multi-quality download engine (1080p HD, 720p, MP3 Audio) with speed tracking and duplicate protection.
+            - **Media Library**: Persistent organizer for downloaded videos, prepared social posts, and bookmarked political videos.
+            - **In-App Self-Update**: Direct updates from GitHub Releases via built-in updater.
+            - **Dark Navy Glassmorphic UI**: AMOLED-friendly futuristic design with animated glowing grid.
+            
+            #### Installation:
+            Download and install `${{ steps.prepare_apk.outputs.apk_name }}` below on your Android device.
+          files: ${{ steps.prepare_apk.outputs.apk_path }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
