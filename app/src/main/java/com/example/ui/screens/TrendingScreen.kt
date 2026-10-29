@@ -326,9 +326,11 @@ fun TrendingScreen(
               downloaderRepository.startDownload(
                 sourceUrl = video.sourceUrl,
                 customTitle = video.nepaliTitle,
-                thumbnailUrl = video.thumbnailUrl
+                thumbnailUrl = video.thumbnailUrl,
+                quality = "4K Ultra HD",
+                directStreamUrl = video.videoStreamUrl
               )
-              Toast.makeText(context, "Added to Downloader!", Toast.LENGTH_SHORT).show()
+              Toast.makeText(context, "Added to Downloader in 4K Ultra HD!", Toast.LENGTH_SHORT).show()
               onNavigateToDownloader()
             },
             onPrepareFacebookPost = {

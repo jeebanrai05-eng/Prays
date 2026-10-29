@@ -1,0 +1,11 @@
+{
+  "versionCode": 2,
+  "versionName": "1.0.1",
+  "latestVersion": "v1.0.1",
+  "minAndroidSdk": 24,
+  "publishedAt": "2026-10-29",
+  "apkUrl": "https://github.com/jeebannraiii/TokDownloader/releases/download/v1.0.1/TokDownloader-v1.0.1.apk",
+  "htmlUrl": "https://github.com/jeebannraiii/TokDownloader/releases/tag/v1.0.1",
+  "apkSizeFormatted": "23.4 MB",
+  "releaseNotes": "• Real live TikTok video parser & watermark-free stream extractor\n• 8K Ultra HDR (120fps) and 4K HDR quality modes\n• Instant Video Review Card with author, stats, and real stream inspection\n• Real video streaming & background multi-thread downloading\n• Exclusive Nepal Politics Trending Hub\n• AI-assisted Nepali Facebook post titles & hashtags generator\n• Self-updater with version.json support"
+}

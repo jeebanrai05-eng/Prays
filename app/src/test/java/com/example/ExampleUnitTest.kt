@@ -101,4 +101,28 @@ class ExampleUnitTest {
     assertTrue(update.isUpdateAvailable)
     assertEquals("v1.1.0", update.latestVersion)
   }
+
+  @Test
+  fun testVideoReviewInfo_Qualities() {
+    val review = com.example.model.VideoReviewInfo(
+      id = "rev_01",
+      originalUrl = "https://www.tiktok.com/@test/video/123",
+      title = "Political Speech Test",
+      authorName = "Leader",
+      authorUsername = "@leader",
+      thumbnailUrl = "https://example.com/cover.jpg",
+      durationSeconds = 60,
+      durationFormatted = "01:00",
+      viewsCount = 10000L,
+      likesCount = 500L,
+      sharesCount = 50L,
+      streamUrlNoWatermark = "https://example.com/play.mp4",
+      streamUrlHd = "https://example.com/hd.mp4"
+    )
+
+    assertTrue(review.availableQualities.contains("8K HDR 120fps"))
+    assertTrue(review.availableQualities.contains("4K Ultra HD"))
+    assertTrue(review.availableQualities.contains("1080p Full HD"))
+    assertTrue(review.availableQualities.contains("Audio MP3 (320kbps)"))
+  }
 }

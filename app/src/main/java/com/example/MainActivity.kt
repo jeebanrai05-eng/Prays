@@ -197,7 +197,10 @@ fun MainAppContent(
           when (tab) {
             MainNavigationTab.DOWNLOADER -> {
               DownloaderScreen(
-                downloaderRepository = downloaderRepository
+                downloaderRepository = downloaderRepository,
+                onPrepareFacebookPost = { selectedVid ->
+                  prepVideo = selectedVid
+                }
               )
             }
             MainNavigationTab.TRENDING -> {

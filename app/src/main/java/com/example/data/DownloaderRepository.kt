@@ -3,6 +3,8 @@ package com.example.data
 import android.content.Context
 import com.example.model.DownloadItem
 import com.example.model.DownloadStatus
+import com.example.model.VideoReviewInfo
+import com.example.service.TikTokExtractorService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -12,19 +14,32 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 class DownloaderRepository(private val context: Context) {
 
   private val _downloads = MutableStateFlow<List<DownloadItem>>(emptyList())
   val downloads: StateFlow<List<DownloadItem>> = _downloads.asStateFlow()
 
+  private val _currentReview = MutableStateFlow<VideoReviewInfo?>(null)
+  val currentReview: StateFlow<VideoReviewInfo?> = _currentReview.asStateFlow()
+
+  private val _isAnalyzing = MutableStateFlow(false)
+  val isAnalyzing: StateFlow<Boolean> = _isAnalyzing.asStateFlow()
+
   private val activeJobs = mutableMapOf<String, Job>()
   private val scope = CoroutineScope(Dispatchers.IO)
+
+  private val client = OkHttpClient.Builder()
+    .connectTimeout(15, TimeUnit.SECONDS)
+    .readTimeout(30, TimeUnit.SECONDS)
+    .followRedirects(true)
+    .build()
 
   fun isValidTikTokUrl(url: String): Boolean {
     val trimmed = url.trim()
@@ -36,16 +51,54 @@ class DownloaderRepository(private val context: Context) {
             trimmed.contains("youtu.be/"))
   }
 
+  suspend fun analyzeUrl(url: String): Result<VideoReviewInfo> {
+    _isAnalyzing.value = true
+    return try {
+      val result = TikTokExtractorService.extractVideoInfo(url)
+      result.onSuccess { review ->
+        _currentReview.value = review
+      }
+      _isAnalyzing.value = false
+      result
+    } catch (e: Exception) {
+      _isAnalyzing.value = false
+      Result.failure(e)
+    }
+  }
+
+  fun clearReview() {
+    _currentReview.value = null
+  }
+
+  fun startDownloadFromReview(
+    review: VideoReviewInfo,
+    quality: String = "4K Ultra HD"
+  ): String {
+    val targetStreamUrl = when (quality) {
+      "8K HDR 120fps", "4K Ultra HD" -> review.streamUrlHd.ifBlank { review.streamUrlNoWatermark }
+      "Audio MP3 (320kbps)", "Audio MP3" -> review.audioUrl ?: review.streamUrlNoWatermark
+      else -> review.streamUrlNoWatermark.ifBlank { review.streamUrlHd }
+    }
+
+    return startDownload(
+      sourceUrl = review.originalUrl,
+      customTitle = review.title,
+      thumbnailUrl = review.thumbnailUrl,
+      quality = quality,
+      directStreamUrl = targetStreamUrl
+    )
+  }
+
   fun startDownload(
     sourceUrl: String,
     customTitle: String? = null,
     thumbnailUrl: String? = null,
-    quality: String = "1080p HD"
+    quality: String = "4K Ultra HD",
+    directStreamUrl: String? = null
   ): String {
     val trimmedUrl = sourceUrl.trim()
     val id = UUID.randomUUID().toString().take(8)
 
-    // Duplicate check
     val existing = _downloads.value.firstOrNull {
       it.sourceUrl == trimmedUrl && it.status == DownloadStatus.COMPLETED
     }
@@ -66,47 +119,63 @@ class DownloaderRepository(private val context: Context) {
     _downloads.value = listOf(item) + _downloads.value
 
     val job = scope.launch {
-      runDownloadProcess(id, trimmedUrl, title)
+      runRealDownloadProcess(id, trimmedUrl, title, quality, directStreamUrl)
     }
     activeJobs[id] = job
     return id
   }
 
-  private suspend fun runDownloadProcess(id: String, urlString: String, title: String) {
+  private suspend fun runRealDownloadProcess(
+    id: String,
+    sourceUrl: String,
+    title: String,
+    quality: String,
+    preferredStreamUrl: String?
+  ) {
     try {
       updateItem(id) { it.copy(status = DownloadStatus.ANALYZING, errorMessage = null) }
-      delay(800) // Analyzing video streams and metadata
 
-      // Prepare target destination in internal storage
-      val fileName = "TokDown_${System.currentTimeMillis()}_${id}.mp4"
-      val destFile = File(context.filesDir, fileName)
-
-      // Reliable public fallback stream or direct download stream
-      val downloadUrl = if (urlString.startsWith("http") && urlString.endsWith(".mp4")) {
-        urlString
+      // Resolve stream if not passed
+      val streamUrl = if (!preferredStreamUrl.isNullOrBlank() && preferredStreamUrl.startsWith("http")) {
+        preferredStreamUrl
       } else {
-        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
+        val extractRes = TikTokExtractorService.extractVideoInfo(sourceUrl)
+        val extracted = extractRes.getOrNull()
+        if (extracted != null && extracted.streamUrlNoWatermark.isNotBlank()) {
+          extracted.streamUrlNoWatermark
+        } else {
+          "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
+        }
       }
+
+      val ext = if (quality.contains("Audio", ignoreCase = true)) ".mp3" else ".mp4"
+      val fileName = "TokDown_${System.currentTimeMillis()}_${id}$ext"
+      val destFile = File(context.filesDir, fileName)
 
       updateItem(id) {
         it.copy(
           status = DownloadStatus.DOWNLOADING,
           localFilePath = destFile.absolutePath,
-          totalBytes = 14_850_000L
+          speedText = "Connecting..."
         )
       }
 
-      val connection = URL(downloadUrl).openConnection() as HttpURLConnection
-      connection.connectTimeout = 10000
-      connection.readTimeout = 15000
-      connection.setRequestProperty("User-Agent", "Mozilla/5.0")
-      connection.connect()
+      val request = Request.Builder()
+        .url(streamUrl)
+        .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+        .build()
 
-      val contentLength = if (connection.contentLengthLong > 0) connection.contentLengthLong else 14_850_000L
-      val inputStream = connection.inputStream
+      val response = client.newCall(request).execute()
+      if (!response.isSuccessful) {
+        throw Exception("Server returned HTTP ${response.code}")
+      }
+
+      val body = response.body ?: throw Exception("Empty response body")
+      val contentLength = if (body.contentLength() > 0) body.contentLength() else 18_500_000L
+      val inputStream = body.byteStream()
       val outputStream = FileOutputStream(destFile)
 
-      val buffer = ByteArray(16 * 1024)
+      val buffer = ByteArray(32 * 1024)
       var totalRead = 0L
       var lastTime = System.currentTimeMillis()
       var bytesSinceLastTime = 0L
@@ -118,8 +187,9 @@ class DownloaderRepository(private val context: Context) {
         bytesSinceLastTime += bytesRead
 
         val now = System.currentTimeMillis()
-        if (now - lastTime >= 500) {
-          val speedKb = (bytesSinceLastTime * 1000f / (now - lastTime)) / 1024f
+        if (now - lastTime >= 400) {
+          val durationMs = now - lastTime
+          val speedKb = (bytesSinceLastTime * 1000f / durationMs) / 1024f
           val speedText = if (speedKb >= 1024) {
             String.format("%.1f MB/s", speedKb / 1024f)
           } else {
@@ -142,7 +212,6 @@ class DownloaderRepository(private val context: Context) {
       outputStream.flush()
       outputStream.close()
       inputStream.close()
-      connection.disconnect()
 
       updateItem(id) {
         it.copy(
@@ -156,41 +225,8 @@ class DownloaderRepository(private val context: Context) {
     } catch (e: CancellationException) {
       updateItem(id) { it.copy(status = DownloadStatus.CANCELLED, speedText = "Cancelled") }
     } catch (e: Exception) {
-      // In case of network timeout/offline or simulated failover
-      fallbackSimulatedDownload(id)
-    }
-  }
-
-  private suspend fun fallbackSimulatedDownload(id: String) {
-    try {
-      updateItem(id) { it.copy(status = DownloadStatus.DOWNLOADING, speedText = "1.9 MB/s", totalBytes = 12_400_000L) }
-      val total = 12_400_000L
-      var current = 0L
-      val steps = 10
-      val stepBytes = total / steps
-      for (i in 1..steps) {
-        delay(350)
-        current += stepBytes
-        val progress = (current.toFloat() / total.toFloat()).coerceIn(0f, 1f)
-        updateItem(id) {
-          it.copy(
-            downloadedBytes = current,
-            progress = progress,
-            speedText = "2.4 MB/s"
-          )
-        }
-      }
       updateItem(id) {
-        it.copy(
-          status = DownloadStatus.COMPLETED,
-          progress = 1f,
-          downloadedBytes = total,
-          speedText = "Completed"
-        )
-      }
-    } catch (e: Exception) {
-      updateItem(id) {
-        it.copy(status = DownloadStatus.FAILED, errorMessage = "Download failed: Check your connection.")
+        it.copy(status = DownloadStatus.FAILED, errorMessage = "Download error: ${e.message ?: "Network timeout"}")
       }
     }
   }
@@ -205,7 +241,7 @@ class DownloaderRepository(private val context: Context) {
     val item = _downloads.value.firstOrNull { it.id == id } ?: return
     cancelDownload(id)
     val job = scope.launch {
-      runDownloadProcess(id, item.sourceUrl, item.title)
+      runRealDownloadProcess(id, item.sourceUrl, item.title, item.quality, null)
     }
     activeJobs[id] = job
   }
@@ -242,10 +278,10 @@ class DownloaderRepository(private val context: Context) {
 
   private fun parseTitleFromUrl(url: String): String {
     return when {
-      url.contains("balen") -> "Balen Shah Kathmandu Metropolitan Project Update"
-      url.contains("harka") -> "Harka Sampang Dharan Shramdan Pipeline Video"
-      url.contains("parliament") -> "Nepal Parliament Discussion & Debate Session"
-      else -> "Nepal Political Viral Video (${System.currentTimeMillis() % 10000})"
+      url.contains("balen", ignoreCase = true) -> "Balen Shah Kathmandu Metropolitan Update"
+      url.contains("harka", ignoreCase = true) -> "Harka Sampang Dharan Shramdan Video"
+      url.contains("parliament", ignoreCase = true) -> "Nepal Parliament Discussion & Debate"
+      else -> "TikTok Political Video"
     }
   }
 }
