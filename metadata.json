@@ -1,0 +1,6 @@
+{
+  "name": "TokDownloader",
+  "description": "Professional TikTok Video Downloader with Downloader, Library, Settings, and exclusive Nepal Politics Trending Video Hub with AI Nepali post preparation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
